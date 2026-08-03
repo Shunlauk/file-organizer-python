@@ -6,11 +6,13 @@ import json
 import logging
 import hashlib
 
+Script_dir = Path(__file__).resolve().parent
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
     handlers=[
-        logging.FileHandler("organizer.log"),
+        logging.FileHandler(Script_dir/"organizer.log"),
         logging.StreamHandler() 
     ]
 )
@@ -26,18 +28,21 @@ def parse():
 
 def hashs(filep,chunk_size=8192):
     obj = hashlib.sha256()
-    with open(filep,"rb") as file:
-        while chunk := file.read(chunk_size):
-            obj.update(chunk)
+    try:
+        with open(filep,"rb") as file:
+            while chunk := file.read(chunk_size):
+                obj.update(chunk)
+    except OSError:
+        return None
     return obj.hexdigest()
 
 def make_undo():
-    with open("undo.json","w") as UndoFile:
+    with open(Script_dir/"undo.json","w") as UndoFile:
         data["last_call"] = 1 if var.copy else 0
         json.dump(data,UndoFile)
         
 def undo():
-    with open("undo.json","r") as UndoFile:
+    with open(Script_dir/"undo.json","r") as UndoFile:
         File = json.load(UndoFile)
         last_call = File.pop("last_call")
     for undo,destination in File.items():
@@ -67,13 +72,13 @@ def make_format(resolve=True):
         suffix = file.suffix.lower()
         if suffix in types:
             files[file]=types[suffix]
-        else:
+        elif not var.dry_mode:
             logging.info(f"Unknown Extension Found: {suffix}")
             new = input("Which folder would you like to add this extensions(default:Others) : ")
             if new == "":
                 new = "Others"
             new_extensions[suffix] = new
-            files[file] = new
+            types[suffix] = new
     if new_extensions:
         types.update(new_extensions)
         with open("extension.json","w") as extension:
@@ -81,8 +86,11 @@ def make_format(resolve=True):
     return files
 
 def duplication_handler(new_file,file):
-    if not new_file.exists() :
+    if not new_file.exists():
         return new_file
+    elif new_file.is_dir():
+        logging.warning(f"A directory already exists at {new_file}; renaming instead")
+        return counter(new_file)
     elif file.stat().st_size == new_file.stat().st_size:
         hash1 = hashs(file)
         hash2 = hashs(new_file)
@@ -112,13 +120,16 @@ def move_files(files):
         destination = duplication_handler(destination,file)
         if destination in ("","e"):
             continue
+        if file.resolve() == destination.resolve():
+            continue
         if var.copy:
             shutil.copy2(file,destination)
             logging.info(f"Copied {file} -> {destination}")
+            data[str(file)] = str(destination)
         else:
             shutil.move(file,destination)
             logging.info(f"Moved {file} -> {destination}")
-        data[str(file)] = str(destination)
+            data[str(file)] = str(destination)
     if not files:
         logging.info("No File Found")
     logging.info("Organization Completed")
@@ -128,39 +139,40 @@ def dry(files):
         destination = var.folder / folder / file.name
         if destination.exists():
             new_file = duplication_handler(destination,file)
-            logging.info(f"File with Same Names Found")
+            logging.info("File with Same Names Found")
             if new_file == "":
-                logging.info(f"Both File are same Skipped")
+                logging.info("Both File are same Skipped")
             elif new_file == "e":
                 continue
             else:
-                logging.info(f"File move {file} -> {new_file}")
+                action = 'copy' if var.copy else 'move'
+                logging.info(f"File {action} {file} -> {new_file}")
         elif var.copy:
             logging.info(f"Will copy {file} -> {destination}")
         else:
             logging.info(f"Will move {file} -> {destination}")
-    if "y" != input("would you like to continue(y/n)").strip().lower():
-        logging.info("Organization Stopped")
-        sys.exit()
+    sys.exit()
         
 var = parse()
 data = {}
-ignore = {'undo.json','extension.json','organizer.log'}
+ignore = {'undo.json','extension.json','organizer.log','.venv','.git','node_modules','venv'}
 try:
     if not var.folder.exists() or not var.folder.is_dir():
-        logging.info("folder is either doesn't exist or is not a directory")
-        logging.info("Organization Stopped")
-        sys.exit()
-    with open("extension.json","r") as file:
-        types = json.load(file)
+        logging.error("folder is either doesn't exist or is not a directory")
+        logging.error("Organization Stopped")
+        sys.exit(1)
+    with open(Script_dir/"extension.json","r") as exten:
+        types = json.load(exten)
         ignore.update(types.values())
-    if var.undo:undo()
+    if var.undo: undo()
     files = make_format()
     if var.dry_mode:
         dry(files)
-    move_files(files)
-    if data:
-        make_undo()
+    else:
+        move_files(files)
+        if data:
+            make_undo()
+            sys.exit(0)
 except Exception as e:
     logging.error(e)
     sys.exit(1)
